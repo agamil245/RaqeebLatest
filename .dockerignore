@@ -1,0 +1,8 @@
+.git
+.gradle
+.claude
+target
+traccar-web/node_modules
+traccar-web/build
+*.zip
+*.run
