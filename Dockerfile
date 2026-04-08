@@ -1,8 +1,8 @@
 # Stage 1: Build the React frontend
 FROM node:22-alpine AS web-build
 WORKDIR /app/traccar-web
-COPY traccar-web/package.json traccar-web/package-lock.json* traccar-web/yarn.lock* ./
-RUN npm ci
+COPY traccar-web/package.json traccar-web/package-lock.json* ./
+RUN npm install --legacy-peer-deps
 COPY traccar-web/ ./
 RUN npm run build
 
