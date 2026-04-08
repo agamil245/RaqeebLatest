@@ -28,11 +28,12 @@ import MapOverlay from '../map/overlay/MapOverlay';
 const useStyles = makeStyles()((theme) => ({
   root: {
     height: '100%',
+    position: 'relative',
   },
   sidebar: {
     display: 'flex',
     flexDirection: 'column',
-    position: 'fixed',
+    position: 'absolute',
     zIndex: 3,
     left: 0,
     top: 0,

@@ -5,7 +5,6 @@ import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useDispatch, useSelector } from 'react-redux';
 import DeviceList from './DeviceList';
-import BottomMenu from '../common/components/BottomMenu';
 import StatusCard from '../common/components/StatusCard';
 import { devicesActions } from '../store';
 import usePersistedState from '../common/util/usePersistedState';
@@ -18,19 +17,20 @@ import { useAttributePreference } from '../common/util/preferences';
 const useStyles = makeStyles()((theme) => ({
   root: {
     height: '100%',
+    position: 'relative',
   },
   sidebar: {
     pointerEvents: 'none',
     display: 'flex',
     flexDirection: 'column',
     [theme.breakpoints.up('md')]: {
-      position: 'fixed',
+      position: 'absolute',
       left: 0,
       top: 0,
-      height: `calc(100% - ${theme.spacing(3)})`,
       width: theme.dimensions.drawerWidthDesktop,
       margin: theme.spacing(1.5),
       zIndex: 3,
+      gap: theme.spacing(1),
     },
     [theme.breakpoints.down('md')]: {
       height: '100%',
@@ -40,15 +40,16 @@ const useStyles = makeStyles()((theme) => ({
   header: {
     pointerEvents: 'auto',
     zIndex: 6,
-  },
-  footer: {
-    pointerEvents: 'auto',
-    zIndex: 5,
+    [theme.breakpoints.up('md')]: {
+      borderRadius: theme.shape.borderRadius * 2,
+    },
   },
   middle: {
-    flex: 1,
     display: 'grid',
     minHeight: 0,
+    [theme.breakpoints.down('md')]: {
+      flex: 1,
+    },
   },
   contentMap: {
     pointerEvents: 'auto',
@@ -60,6 +61,11 @@ const useStyles = makeStyles()((theme) => ({
     zIndex: 4,
     display: 'flex',
     minHeight: 0,
+    [theme.breakpoints.up('md')]: {
+      maxHeight: '430px',
+      borderRadius: theme.shape.borderRadius * 2,
+      overflow: 'hidden',
+    },
   },
 }));
 
@@ -120,7 +126,7 @@ const MainPage = () => {
         />
       )}
       <div className={classes.sidebar}>
-        <Paper square elevation={3} className={classes.header}>
+        <Paper elevation={3} className={classes.header}>
           <MainToolbar
             filteredDevices={filteredDevices}
             devicesOpen={devicesOpen}
@@ -146,18 +152,12 @@ const MainPage = () => {
             </div>
           )}
           <Paper
-            square
             className={classes.contentList}
             style={devicesOpen ? {} : { visibility: 'hidden' }}
           >
             <DeviceList devices={filteredDevices} />
           </Paper>
         </div>
-        {desktop && (
-          <div className={classes.footer}>
-            <BottomMenu />
-          </div>
-        )}
       </div>
       <EventsDrawer open={eventsOpen} onClose={() => setEventsOpen(false)} />
       {selectedDeviceId && (

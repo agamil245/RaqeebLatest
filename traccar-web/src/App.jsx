@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useMediaQuery, useTheme } from '@mui/material';
 import { makeStyles } from 'tss-react/mui';
 import BottomMenu from './common/components/BottomMenu';
+import AppSidebar from './common/components/AppSidebar';
 import SocketController from './SocketController';
 import CachingController from './CachingController';
 import { useCatch, useEffectAsync } from './reactHelper';
@@ -14,8 +15,16 @@ import Loader from './common/components/Loader';
 import fetchOrThrow from './common/util/fetchOrThrow';
 
 const useStyles = makeStyles()(() => ({
+  layout: {
+    display: 'flex',
+    flexGrow: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  },
   page: {
     flexGrow: 1,
+    minWidth: 0,
+    height: '100%',
     overflow: 'auto',
   },
   menu: {
@@ -73,8 +82,11 @@ const App = () => {
       <CachingController />
       <UpdateController />
       <MotionController />
-      <div className={classes.page}>
-        <Outlet />
+      <div className={classes.layout}>
+        {desktop && <AppSidebar />}
+        <div className={classes.page}>
+          <Outlet />
+        </div>
       </div>
       {!desktop && (
         <div className={classes.menu}>

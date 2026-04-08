@@ -1,6 +1,5 @@
 import { useState, useRef } from 'react';
 import { useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
 import {
   Toolbar,
   IconButton,
@@ -28,6 +27,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import { useTranslation } from '../common/components/LocalizationProvider';
 import { useDeviceReadonly } from '../common/util/permissions';
 import DeviceRow from './DeviceRow';
+import AddDeviceDialog from './AddDeviceDialog';
 
 const useStyles = makeStyles()((theme) => ({
   toolbar: {
@@ -58,7 +58,6 @@ const MainToolbar = ({
 }) => {
   const { classes } = useStyles();
   const theme = useTheme();
-  const navigate = useNavigate();
   const t = useTranslation();
 
   const deviceReadonly = useDeviceReadonly();
@@ -70,6 +69,7 @@ const MainToolbar = ({
   const inputRef = useRef();
   const [filterAnchorEl, setFilterAnchorEl] = useState(null);
   const [devicesAnchorEl, setDevicesAnchorEl] = useState(null);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
 
   const deviceStatusCount = (status) =>
     Object.values(devices).filter((d) => d.status === status).length;
@@ -192,7 +192,7 @@ const MainToolbar = ({
           </FormGroup>
         </div>
       </Popover>
-      <IconButton edge="end" onClick={() => navigate('/settings/device')} disabled={deviceReadonly}>
+      <IconButton edge="end" onClick={() => setAddDialogOpen(true)} disabled={deviceReadonly}>
         <Tooltip
           open={!deviceReadonly && Object.keys(devices).length === 0}
           title={t('deviceRegisterFirst')}
@@ -201,6 +201,7 @@ const MainToolbar = ({
           <AddIcon />
         </Tooltip>
       </IconButton>
+      <AddDeviceDialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} />
     </Toolbar>
   );
 };

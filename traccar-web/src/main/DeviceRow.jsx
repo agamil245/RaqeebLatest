@@ -63,6 +63,30 @@ const useStyles = makeStyles()((theme) => ({
   selected: {
     backgroundColor: theme.palette.action.selected,
   },
+  online: {
+    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+    borderLeft: '3px solid #22c55e',
+    '&:hover': { backgroundColor: 'rgba(34, 197, 94, 0.25)' },
+  },
+  offline: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderLeft: '3px solid #ef4444',
+    '&:hover': { backgroundColor: 'rgba(239, 68, 68, 0.2)' },
+  },
+  unknown: {
+    backgroundColor: 'rgba(100, 116, 139, 0.12)',
+    borderLeft: '3px solid #64748b',
+    '&:hover': { backgroundColor: 'rgba(100, 116, 139, 0.2)' },
+  },
+  avatarOnline: {
+    backgroundColor: '#22c55e',
+  },
+  avatarOffline: {
+    backgroundColor: '#ef4444',
+  },
+  avatarUnknown: {
+    backgroundColor: '#64748b',
+  },
 }));
 
 const DeviceRow = ({ devices, index, style }) => {
@@ -117,6 +141,9 @@ const DeviceRow = ({ devices, index, style }) => {
     );
   };
 
+  const statusClass = item.status === 'online' ? classes.online : (item.status === 'offline' ? classes.offline : classes.unknown);
+  const avatarClass = item.status === 'online' ? classes.avatarOnline : (item.status === 'offline' ? classes.avatarOffline : classes.avatarUnknown);
+
   return (
     <div style={style}>
       <ListItemButton
@@ -124,10 +151,10 @@ const DeviceRow = ({ devices, index, style }) => {
         onClick={() => dispatch(devicesActions.selectId(item.id))}
         disabled={!admin && item.disabled}
         selected={selectedDeviceId === item.id}
-        className={selectedDeviceId === item.id ? classes.selected : null}
+        className={selectedDeviceId === item.id ? classes.selected : statusClass}
       >
         <ListItemAvatar>
-          <Avatar>
+          <Avatar className={avatarClass}>
             <img className={classes.icon} src={mapIcons[mapIconKey(item.category)]} alt="" />
           </Avatar>
         </ListItemAvatar>

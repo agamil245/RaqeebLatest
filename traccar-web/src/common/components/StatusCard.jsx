@@ -18,6 +18,7 @@ import {
   TableFooter,
   Link,
   Tooltip,
+  CircularProgress,
 } from '@mui/material';
 import { makeStyles } from 'tss-react/mui';
 import CloseIcon from '@mui/icons-material/Close';
@@ -26,10 +27,17 @@ import SendIcon from '@mui/icons-material/Send';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PendingIcon from '@mui/icons-material/Pending';
+import TerminalIcon from '@mui/icons-material/Terminal';
+import AddIcon from '@mui/icons-material/Add';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Divider from '@mui/material/Divider';
+import Snackbar from '@mui/material/Snackbar';
 
 import { useTranslation } from './LocalizationProvider';
 import RemoveDialog from './RemoveDialog';
 import PositionValue from './PositionValue';
+import { prefixString } from '../util/stringUtils';
 import { useDeviceReadonly, useRestriction } from '../util/permissions';
 import usePositionAttributes from '../attributes/usePositionAttributes';
 import { devicesActions } from '../../store';
@@ -143,8 +151,44 @@ const StatusCard = ({ deviceId, position, onClose, disableActions, desktopPaddin
   const navigationAppTitle = useAttributePreference('navigationAppTitle');
 
   const [anchorEl, setAnchorEl] = useState(null);
+  const [commandAnchorEl, setCommandAnchorEl] = useState(null);
+  const [commandSnackbar, setCommandSnackbar] = useState('');
+  const [commandOptions, setCommandOptions] = useState([]);
+  const [commandsLoading, setCommandsLoading] = useState(false);
 
   const [removing, setRemoving] = useState(false);
+
+  const loadCommands = useCatch(async (event) => {
+    setCommandAnchorEl(event.currentTarget);
+    setCommandsLoading(true);
+    const savedResponse = await fetchOrThrow(`/api/commands/send?deviceId=${deviceId}`);
+    const saved = await savedResponse.json();
+    const typesResponse = await fetchOrThrow(`/api/commands/types?${new URLSearchParams({ deviceId })}`);
+    const types = await typesResponse.json();
+    setCommandOptions([
+      ...saved.map((cmd) => ({ kind: 'saved', id: cmd.id, label: cmd.description, command: cmd })),
+      ...types.map((cmd) => ({ kind: 'type', type: cmd.type, label: t(prefixString('command', cmd.type)) })),
+    ]);
+    setCommandsLoading(false);
+  });
+
+  const sendCommand = useCatch(async (option) => {
+    setCommandAnchorEl(null);
+    if (option.kind === 'saved') {
+      await fetchOrThrow('/api/commands/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(option.command),
+      });
+    } else {
+      await fetchOrThrow('/api/commands/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, type: option.type, attributes: {} }),
+      });
+    }
+    setCommandSnackbar(t('commandSent'));
+  });
 
   const handleRemove = useCatch(async (removed) => {
     if (removed) {
@@ -261,10 +305,10 @@ const StatusCard = ({ deviceId, position, onClose, disableActions, desktopPaddin
                 </Tooltip>
                 <Tooltip title={t('commandTitle')}>
                   <IconButton
-                    onClick={() => navigate(`/settings/device/${deviceId}/command`)}
+                    onClick={loadCommands}
                     disabled={disableActions}
                   >
-                    <SendIcon />
+                    <TerminalIcon />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title={t('sharedEdit')}>
@@ -331,6 +375,47 @@ const StatusCard = ({ deviceId, position, onClose, disableActions, desktopPaddin
           )}
         </Menu>
       )}
+      <Menu
+        anchorEl={commandAnchorEl}
+        open={Boolean(commandAnchorEl)}
+        onClose={() => setCommandAnchorEl(null)}
+      >
+        {commandsLoading ? (
+          <MenuItem disabled><CircularProgress size={20} sx={{ mr: 1 }} /> Loading...</MenuItem>
+        ) : commandOptions.length === 0 ? (
+          <MenuItem disabled>No commands available</MenuItem>
+        ) : (
+          <>
+            {commandOptions.filter((o) => o.kind === 'saved').length > 0 && (
+              <MenuItem disabled><Typography variant="caption" color="textSecondary">{t('sharedSavedCommands')}</Typography></MenuItem>
+            )}
+            {commandOptions.filter((o) => o.kind === 'saved').map((option) => (
+              <MenuItem key={`saved-${option.id}`} onClick={() => sendCommand(option)}>
+                <ListItemIcon><SendIcon fontSize="small" color="primary" /></ListItemIcon>
+                <ListItemText>{option.label}</ListItemText>
+              </MenuItem>
+            ))}
+            {commandOptions.filter((o) => o.kind === 'saved').length > 0 && <Divider />}
+            <MenuItem disabled><Typography variant="caption" color="textSecondary">{t('sharedType')}</Typography></MenuItem>
+            {commandOptions.filter((o) => o.kind === 'type').map((option) => (
+              <MenuItem key={`type-${option.type}`} onClick={() => sendCommand(option)}>
+                <ListItemText>{option.label}</ListItemText>
+              </MenuItem>
+            ))}
+          </>
+        )}
+        <Divider />
+        <MenuItem onClick={() => { setCommandAnchorEl(null); navigate('/settings/commands'); }}>
+          <ListItemIcon><AddIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>{t('sharedSavedCommands')}</ListItemText>
+        </MenuItem>
+      </Menu>
+      <Snackbar
+        open={!!commandSnackbar}
+        autoHideDuration={3000}
+        onClose={() => setCommandSnackbar('')}
+        message={commandSnackbar}
+      />
       <RemoveDialog
         open={removing}
         endpoint="devices"

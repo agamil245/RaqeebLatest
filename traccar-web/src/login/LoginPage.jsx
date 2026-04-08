@@ -33,7 +33,7 @@ import {
   nativeEnvironment,
   nativePostMessage,
 } from '../common/components/NativeInterface';
-import LogoImage from './LogoImage';
+import ShieldIcon from '../resources/images/icon/shield.svg?react';
 import { useCatch } from '../reactHelper';
 import QrCodeDialog from '../common/components/QrCodeDialog';
 import fetchOrThrow from '../common/util/fetchOrThrow';
@@ -195,7 +195,12 @@ const LoginPage = () => {
       </div>
       <div className={classes.container}>
         {useMediaQuery(theme.breakpoints.down('lg')) && (
-          <LogoImage color={theme.palette.primary.main} />
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, mb: 2 }}>
+            <ShieldIcon style={{ width: 30, height: 30, color: theme.palette.primary.main }} />
+            <Box component="span" sx={{ fontFamily: '"Orbitron", sans-serif', fontWeight: 800, fontSize: '1.6rem', letterSpacing: '0.1em', color: theme.palette.primary.main, textTransform: 'uppercase' }}>
+              Raqeeb
+            </Box>
+          </Box>
         )}
         {!openIdForced && (
           <>
