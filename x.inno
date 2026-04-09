@@ -1,0 +1,981 @@
+#include <Arduino.h>
+#include <Preferences.h>
+#include <HardwareSerial.h>
+#include <math.h>
+
+/**
+ * RAQEEB v6.0 - Enhanced Stable Version
+ * Board: LILYGO T-SIM7670G S3
+ *
+ * Main improvements:
+ * - Better battery ADC handling with calibration multiplier
+ * - Invalid battery reading rejection
+ * - GNSS first, LBS fallback
+ * - Retry logic for GPS
+ * - Better Traccar HTTP flow
+ * - Safer SMS parser
+ * - MCC commands only
+ * - Live mode / power save mode
+ * - Movement detection
+ * - USB lock/unlock
+ * - Optional charging detect
+ */
+
+// ===================== Pins =====================
+static const int MODEM_TX        = 11;
+static const int MODEM_RX        = 10;
+static const int MODEM_PWRKEY    = 18;
+static const int MODEM_DTR       = 9;
+static const int MODEM_FLIGHT    = 7;
+static const int LED_PIN         = 41;
+static const int USB_SWITCH_PIN  = 4;
+static const bool USB_ACTIVE_LOW = false;
+
+// ===================== Battery / Charging =====================
+// NOTE: BAT_ADC_PIN must NOT conflict with USB_SWITCH_PIN.
+// GPIO14 is the typical battery ADC on LILYGO T-SIM7670G S3.
+// If your board reads wrong, change BAT_ADC_PIN and BAT_ADC_MULTIPLIER.
+static const int   BAT_ADC_PIN         = 14;
+static const float BAT_ADC_MULTIPLIER  = 3.00f;   // calibrate with multimeter
+static const float BATTERY_FULL_V      = 4.20f;
+static const float BATTERY_EMPTY_V     = 3.20f;
+static const float BATTERY_MIN_VALID_V = 2.50f;
+static const float BATTERY_MAX_VALID_V = 4.50f;
+
+// Optional charge detect
+static const bool CHARGE_DETECT_AVAILABLE = false;
+static const int  CHARGE_DETECT_PIN       = 5;
+static const bool CHARGE_DETECT_ACTIVE    = true; // HIGH means charging
+
+// ===================== Modem / Network Config =====================
+static const uint32_t MODEM_BAUD = 115200;
+static const char *APN           = "etisalat";
+static const char *OWNER         = "+971557292799";
+static const char *ALERT_NUMBER  = "00971551058157";
+static const bool ACCEPT_ANY     = true;
+
+// ===================== Traccar =====================
+static const char *TC_HOST       = "31.97.71.241";
+static const uint16_t TC_PORT    = 5055;
+static const char *DEV_ID        = "RAQEEB_USB_1001";
+
+// ===================== Timing =====================
+static const uint32_t T_GPS            = 10000;
+static const uint32_t T_LOC            = 60000;
+static const uint32_t T_SMS            = 15000;
+static const uint32_t T_HB             = 60000;
+static const uint32_t T_TC             = 60000;
+static const uint32_t T_NET            = 30000;
+static const uint32_t T_LIVE           = 10000;
+static const uint32_t T_BATT           = 15000;
+static const uint32_t T_CHARGE_SMS_GAP = 1800000UL; // 30 min
+static const uint32_t T_STILL_MS       = 300000UL;  // 5 min
+static const uint32_t T_GPS_SAVE       = 60000UL;
+static const uint32_t T_TC_SAVE        = 300000UL;
+
+// ===================== State =====================
+HardwareSerial gsm(1);
+Preferences prefs;
+
+bool usbOn         = false;
+bool modemOK       = false;
+bool dataOK        = false;
+bool gpsFix        = false;
+bool locFix        = false;
+bool liveMode      = false;
+bool powerSaveMode = false;
+
+double lat         = 0.0;
+double lon         = 0.0;
+double spd         = 0.0;
+double crs         = 0.0;
+double alt         = 0.0;
+
+int sats           = 0;
+int accM           = 0;
+int csq            = 0;
+
+String op          = "";
+String locSrc      = "none";
+String lastCmd     = "boot";
+String lastSrc     = "boot";
+
+int tcOK           = 0;
+int tcFail         = 0;
+
+// battery
+float batteryVolt        = 0.0f;
+int batteryPercent       = -1;
+bool chargingNow         = false;
+bool chargingPrev        = false;
+uint32_t lastBattMs      = 0;
+uint32_t lastChargeSms   = 0;
+bool batteryReadingValid = false;
+
+// movement
+double lastMoveLat       = 0.0;
+double lastMoveLon       = 0.0;
+uint32_t lastMoveMs      = 0;
+
+// timing
+uint32_t bootMs = 0;
+uint32_t tGps   = 0;
+uint32_t tLoc   = 0;
+uint32_t tSms   = 0;
+uint32_t tHb    = 0;
+uint32_t tTc    = 0;
+uint32_t tNet   = 0;
+uint32_t tLive  = 0;
+
+// ===================== Helpers =====================
+static bool hasLoc() {
+    return (gpsFix || locFix) && (lat != 0.0 || lon != 0.0);
+}
+
+static void setUsbHw(bool on) {
+    digitalWrite(USB_SWITCH_PIN, USB_ACTIVE_LOW ? !on : on);
+    digitalWrite(LED_PIN, on ? HIGH : LOW);
+}
+
+static void setUsb(bool on, const char *src) {
+    usbOn = on;
+    setUsbHw(on);
+    prefs.putBool("usb", on);
+    lastCmd = on ? "enable" : "disable";
+    lastSrc = src;
+    Serial.printf("[USB] %s by %s\n", on ? "ON" : "OFF", src);
+}
+
+static double simpleDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
+    double dx = (lon2 - lon1) * 111320.0 * cos(lat1 * PI / 180.0);
+    double dy = (lat2 - lat1) * 110540.0;
+    return sqrt(dx * dx + dy * dy);
+}
+
+static String extractDigits(const String &s) {
+    String out;
+    for (size_t i = 0; i < s.length(); i++) {
+        if (isDigit((unsigned char)s[i])) out += s[i];
+    }
+    return out;
+}
+
+static bool samePhoneLoose(const String &a, const String &b) {
+    String da = extractDigits(a);
+    String db = extractDigits(b);
+    if (!da.length() || !db.length()) return false;
+    return da.endsWith(db) || db.endsWith(da);
+}
+
+static String urlEncode(const String &s) {
+    String out;
+    const char *hex = "0123456789ABCDEF";
+    for (size_t i = 0; i < s.length(); i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += hex[(c >> 4) & 0x0F];
+            out += hex[c & 0x0F];
+        }
+    }
+    return out;
+}
+
+// ===================== AT Commands =====================
+static String at(const String &cmd, uint32_t ms = 3000) {
+    while (gsm.available()) gsm.read();
+
+    gsm.println(cmd);
+    Serial.printf("[AT]>> %s\n", cmd.c_str());
+
+    String r;
+    uint32_t t0 = millis();
+    while (millis() - t0 < ms) {
+        while (gsm.available()) {
+            r += (char)gsm.read();
+        }
+        if (r.indexOf("OK") >= 0 || r.indexOf("ERROR") >= 0) break;
+        delay(5);
+    }
+
+    r.trim();
+    if (r.length()) Serial.printf("[AT]<< %s\n", r.c_str());
+    return r;
+}
+
+static bool atok(const String &cmd, uint32_t ms = 3000) {
+    return at(cmd, ms).indexOf("OK") >= 0;
+}
+
+static String waitTok(const String &tok, uint32_t ms) {
+    String r;
+    uint32_t t0 = millis();
+    while (millis() - t0 < ms) {
+        while (gsm.available()) {
+            r += (char)gsm.read();
+            if (r.indexOf(tok) >= 0) return r;
+        }
+        delay(5);
+    }
+    return r;
+}
+
+// ===================== SMS =====================
+static bool sms(const String &num, const String &txt) {
+    if (!atok("AT+CMGF=1", 2000)) return false;
+
+    gsm.print("AT+CMGS=\"");
+    gsm.print(num);
+    gsm.println("\"");
+
+    if (waitTok(">", 5000).indexOf('>') < 0) return false;
+
+    gsm.print(txt);
+    gsm.write(26);
+
+    String r = waitTok("+CMGS:", 15000);
+    if (r.indexOf("+CMGS:") >= 0) {
+        Serial.println("[SMS] sent");
+        return true;
+    }
+    Serial.println("[SMS] failed");
+    return false;
+}
+
+// ===================== Battery =====================
+static float readBatteryVoltageRaw() {
+    const int samples = 15;
+    uint32_t sum = 0;
+
+    for (int i = 0; i < samples; i++) {
+        sum += analogRead(BAT_ADC_PIN);
+        delay(4);
+    }
+
+    float raw = (float)sum / samples;
+    float pinV = (raw / 4095.0f) * 3.3f;
+    float batV = pinV * BAT_ADC_MULTIPLIER;
+
+    Serial.printf("[BAT-DEBUG] adc=%.1f pinV=%.3f batV=%.3f\n", raw, pinV, batV);
+    return batV;
+}
+
+static int batteryPercentFromVoltage(float v) {
+    int pct = (int)(((v - BATTERY_EMPTY_V) / (BATTERY_FULL_V - BATTERY_EMPTY_V)) * 100.0f);
+    if (pct > 100) pct = 100;
+    if (pct < 0) pct = 0;
+    return pct;
+}
+
+static bool readChargingState() {
+    if (!CHARGE_DETECT_AVAILABLE) return false;
+    int v = digitalRead(CHARGE_DETECT_PIN);
+    return CHARGE_DETECT_ACTIVE ? (v == HIGH) : (v == LOW);
+}
+
+static void updateBatteryAndCharging() {
+    if (millis() - lastBattMs < T_BATT && lastBattMs > 0) return;
+    lastBattMs = millis();
+
+    float v = readBatteryVoltageRaw();
+    chargingPrev = chargingNow;
+    chargingNow = readChargingState();
+
+    if (v >= BATTERY_MIN_VALID_V && v <= BATTERY_MAX_VALID_V) {
+        batteryVolt = v;
+        batteryPercent = batteryPercentFromVoltage(v);
+        batteryReadingValid = true;
+        Serial.printf("[BAT] %.2fV %d%% chg=%s\n", batteryVolt, batteryPercent, chargingNow ? "YES" : "NO");
+    } else {
+        batteryReadingValid = false;
+        Serial.printf("[BAT] INVALID reading %.2fV chg=%s\n", v, chargingNow ? "YES" : "NO");
+    }
+}
+
+static void sendChargeStartAlertIfNeeded() {
+    if (!CHARGE_DETECT_AVAILABLE) return;
+
+    if (!chargingPrev && chargingNow) {
+        if ((millis() - lastChargeSms >= T_CHARGE_SMS_GAP) || lastChargeSms == 0) {
+            String m = "CHARGING STARTED";
+            if (batteryReadingValid) {
+                m += "\nBattery:" + String(batteryPercent) + "%";
+                m += "\nVolt:" + String(batteryVolt, 2) + "V";
+            }
+            sms(ALERT_NUMBER, m);
+            lastChargeSms = millis();
+        }
+    }
+}
+
+// ===================== Modem Init =====================
+static void modemPower() {
+    pinMode(MODEM_PWRKEY, OUTPUT);
+    pinMode(MODEM_DTR, OUTPUT);
+    pinMode(MODEM_FLIGHT, OUTPUT);
+
+    digitalWrite(MODEM_FLIGHT, HIGH);
+    digitalWrite(MODEM_DTR, LOW);
+
+    Serial.println("[GSM] Power on...");
+    digitalWrite(MODEM_PWRKEY, LOW);
+    delay(100);
+    digitalWrite(MODEM_PWRKEY, HIGH);
+    delay(1200);
+    digitalWrite(MODEM_PWRKEY, LOW);
+    delay(8000);
+}
+
+static bool modemInit() {
+    for (int i = 0; i < 15; i++) {
+        if (atok("AT", 1500)) goto ok;
+        delay(1000);
+    }
+    Serial.println("[GSM] No response!");
+    return false;
+
+ok:
+    atok("ATE0", 2000);
+    atok("AT+CMEE=2", 2000);
+
+    if (at("AT+CPIN?", 4000).indexOf("READY") < 0) {
+        Serial.println("[GSM] No SIM!");
+        return false;
+    }
+
+    String r = at("AT+CSQ", 2000);
+    int p = r.indexOf("+CSQ:");
+    if (p >= 0) csq = r.substring(p + 6).toInt();
+
+    r = at("AT+COPS?", 5000);
+    int q1 = r.indexOf('"');
+    int q2 = r.indexOf('"', q1 + 1);
+    if (q1 >= 0 && q2 > q1) op = r.substring(q1 + 1, q2);
+
+    atok("AT+CGDCONT=1,\"IP\",\"" + String(APN) + "\"", 5000);
+    atok("AT+CMGF=1", 3000);
+    atok("AT+CNMI=2,1,0,0,0", 3000);
+
+    modemOK = true;
+    Serial.printf("[GSM] OK CSQ=%d OP=%s\n", csq, op.c_str());
+    return true;
+}
+
+static bool dataConnect() {
+    if (!modemOK) return false;
+
+    at("AT+CGACT?", 5000);
+    dataOK = at("AT+CGACT=1,1", 15000).indexOf("OK") >= 0;
+    if (dataOK) {
+        at("AT+CGPADDR=1", 4000);
+        Serial.println("[NET] Connected");
+    } else {
+        Serial.println("[NET] Connect failed");
+    }
+    return dataOK;
+}
+
+// ===================== GPS =====================
+static void gpsInit() {
+    atok("AT+CGNSSPWR=1", 5000);
+    delay(2000);
+    atok("AT+CGNSSMODE=15", 3000);
+    at("AT+CGNSSRST=1", 3000);
+    Serial.println("[GPS] Started");
+}
+
+static bool parseGpsLine(const String &line) {
+    String f[20];
+    int cnt = 0, s = 0;
+
+    for (int i = 0; i <= (int)line.length() && cnt < 20; i++) {
+        if (i == (int)line.length() || line[i] == ',') {
+            f[cnt++] = line.substring(s, i);
+            s = i + 1;
+        }
+    }
+
+    if (cnt < 13) return false;
+    if (!f[4].length() || !f[6].length()) return false;
+
+    auto dm = [](const String &raw, char h) -> double {
+        double v = raw.toDouble();
+        if (v <= 0) return 0;
+        int d = (int)(v / 100.0);
+        double m = v - d * 100.0;
+        double res = d + m / 60.0;
+        if (h == 'S' || h == 'W') res = -res;
+        return res;
+    };
+
+    // f[0]=mode, f[1]=GPS SVs, f[2]=GLONASS SVs, f[3]=BEIDOU SVs
+    // f[4]=lat, f[5]=N/S, f[6]=lon, f[7]=E/W
+    // f[8]=date, f[9]=UTC, f[10]=alt, f[11]=speed, f[12]=course
+    double la = dm(f[4], f[5].length() ? f[5][0] : 'N');
+    double lo = dm(f[6], f[7].length() ? f[7][0] : 'E');
+
+    if (la == 0 && lo == 0) return false;
+
+    lat = la;
+    lon = lo;
+    sats = f[1].toInt();
+    alt = f[10].toDouble();
+    spd = f[11].toDouble();
+    crs = f[12].toDouble();
+    accM = 5;
+
+    gpsFix = true;
+    locFix = false;
+    locSrc = "gps";
+
+    Serial.printf("[GPS] %.6f,%.6f sats=%d\n", lat, lon, sats);
+    return true;
+}
+
+static bool gpsReadOnce() {
+    String r = at("AT+CGNSSINFO", 4000);
+
+    int p = r.indexOf("+CGNSSINFO:");
+    if (p < 0 || r.indexOf(",,,,,,,,") >= 0) {
+        gpsFix = false;
+        return false;
+    }
+
+    int start = p + 11;
+    int eol = r.indexOf('\n', start);
+    if (eol < 0) eol = r.length();
+    String line = r.substring(start, eol);
+    line.trim();
+
+    return parseGpsLine(line);
+}
+
+static bool gpsRead() {
+    if (gpsReadOnce()) return true;
+    delay(2000);
+    return gpsReadOnce();
+}
+
+// ===================== LOC Fallback =====================
+static bool locRead() {
+    if (millis() - tLoc < T_LOC && tLoc > 0) return false;
+    tLoc = millis();
+
+    Serial.println("[LOC] Requesting...");
+    while (gsm.available()) gsm.read();
+    gsm.println("AT+CLBS=4,1");
+
+    String r;
+    uint32_t t0 = millis();
+    while (millis() - t0 < 25000) {
+        while (gsm.available()) {
+            r += (char)gsm.read();
+
+            if (r.indexOf("+CLBS:") >= 0) {
+                delay(300);
+                while (gsm.available()) r += (char)gsm.read();
+
+                Serial.printf("[LOC] Raw: %s\n", r.c_str());
+
+                int p = r.indexOf("+CLBS:") + 6;
+                String d = r.substring(p);
+                d.trim();
+
+                if (d.startsWith(":")) {
+                    d.remove(0, 1);
+                    d.trim();
+                }
+
+                int c1 = d.indexOf(',');
+                if (c1 < 0) goto locfail;
+                String statStr = d.substring(0, c1);
+                statStr.trim();
+                if (statStr != "0") goto locfail;
+
+                d = d.substring(c1 + 1);
+                int c2 = d.indexOf(',');
+                if (c2 < 0) goto locfail;
+                String sLat = d.substring(0, c2);
+
+                d = d.substring(c2 + 1);
+                int c3 = d.indexOf(',');
+                if (c3 < 0) goto locfail;
+                String sLon = d.substring(0, c3);
+
+                d = d.substring(c3 + 1);
+                int c4 = d.indexOf(',');
+                String sAcc = (c4 >= 0) ? d.substring(0, c4) : d;
+
+                double la = sLat.toDouble();
+                double lo = sLon.toDouble();
+                int ac = sAcc.toInt();
+
+                if (la == 0.0 || lo == 0.0) goto locfail;
+
+                lat = la;
+                lon = lo;
+                spd = 0;
+                crs = 0;
+                alt = 0;
+                sats = 0;
+                accM = ac > 0 ? ac : 550;
+
+                gpsFix = false;
+                locFix = true;
+                locSrc = "lbs";
+
+                Serial.printf("[LOC] %.6f,%.6f acc=%dm\n", lat, lon, accM);
+                return true;
+            }
+        }
+        delay(10);
+    }
+
+locfail:
+    Serial.println("[LOC] Failed");
+    return false;
+}
+
+// ===================== Movement / Power Save =====================
+static void updateMovementState() {
+    if (!hasLoc()) return;
+
+    if (lastMoveLat == 0.0 && lastMoveLon == 0.0) {
+        lastMoveLat = lat;
+        lastMoveLon = lon;
+        lastMoveMs = millis();
+        return;
+    }
+
+    double dist = simpleDistanceMeters(lastMoveLat, lastMoveLon, lat, lon);
+
+    if (dist >= 30.0) {
+        lastMoveLat = lat;
+        lastMoveLon = lon;
+        lastMoveMs = millis();
+        powerSaveMode = false;
+    } else {
+        if (millis() - lastMoveMs > T_STILL_MS) {
+            powerSaveMode = true;
+        }
+    }
+
+    if (batteryReadingValid && batteryPercent <= 15) {
+        powerSaveMode = true;
+        liveMode = false;
+    }
+}
+
+// ===================== Traccar =====================
+static void tcSend() {
+    if (!modemOK || !dataOK || !hasLoc()) return;
+    if (millis() - tTc < T_TC && tTc > 0) return;
+    tTc = millis();
+
+    String url = "http://" + String(TC_HOST) + ":" + String(TC_PORT)
+               + "/?id=" + urlEncode(String(DEV_ID))
+               + "&lat=" + String(lat, 6)
+               + "&lon=" + String(lon, 6)
+               + "&speed=" + String(spd, 1)
+               + "&bearing=" + String(crs, 1)
+               + "&altitude=" + String(alt, 1)
+               + "&accuracy=" + String(accM)
+               + "&valid=" + String(gpsFix ? "true" : "false")
+               + "&usb=" + String(usbOn ? "on" : "off")
+               + "&src=" + String(locSrc)
+               + "&signal=" + String(csq)
+               + "&rssi=" + String(csq)
+               + "&charging=" + String(chargingNow ? "true" : "false")
+               + "&charge=" + String(chargingNow ? "true" : "false");
+
+    if (batteryReadingValid) {
+        url += "&batteryLevel=" + String(batteryPercent);
+        url += "&battery=" + String(batteryVolt, 2);
+        url += "&power=" + String(batteryVolt, 2);
+    }
+
+    Serial.println("[TC] Sending to Traccar...");
+    at("AT+HTTPTERM", 1000);
+
+    if (!atok("AT+HTTPINIT", 3000)) {
+        Serial.println("[TC] HTTPINIT fail");
+        tcFail++;
+        return;
+    }
+
+    atok("AT+HTTPPARA=\"CID\",1", 3000);
+
+    if (!atok("AT+HTTPPARA=\"URL\",\"" + url + "\"", 6000)) {
+        Serial.println("[TC] URL fail");
+        at("AT+HTTPTERM", 1000);
+        tcFail++;
+        return;
+    }
+
+    while (gsm.available()) gsm.read();
+    gsm.println("AT+HTTPACTION=0");
+    Serial.println("[AT]>> AT+HTTPACTION=0");
+
+    String r;
+    uint32_t t0 = millis();
+    while (millis() - t0 < 20000) {
+        while (gsm.available()) r += (char)gsm.read();
+        if (r.indexOf("+HTTPACTION:") >= 0) break;
+        delay(50);
+    }
+
+    r.trim();
+    Serial.printf("[AT]<< %s\n", r.c_str());
+
+    if (r.indexOf("+HTTPACTION: 0,200") >= 0) {
+        tcOK++;
+        Serial.printf("[TC] SUCCESS (%d ok %d fail)\n", tcOK, tcFail);
+    } else {
+        tcFail++;
+        Serial.printf("[TC] FAILED (%d ok %d fail)\n", tcOK, tcFail);
+        if (r.indexOf("601") >= 0 || r.indexOf("603") >= 0 || r.indexOf("604") >= 0) {
+            Serial.println("[TC] Network error - reconnect needed");
+            dataOK = false;
+        }
+    }
+
+    at("AT+HTTPTERM", 1000);
+}
+
+// ===================== Location Send Helpers =====================
+static void refreshLocationNow() {
+    if (!gpsRead()) {
+        tLoc = 0;
+        locRead();
+    }
+}
+
+static void sendLocSms(const String &to) {
+    refreshLocationNow();
+
+    if (gpsFix || locFix) {
+        String m = String(locSrc == "gps" ? "GPS" : "LBS");
+        m += ":\n";
+        m += String(lat, 6) + "," + String(lon, 6);
+        m += "\nAcc:" + String(accM) + "m";
+        m += "\nhttps://maps.google.com/?q=" + String(lat, 6) + "," + String(lon, 6);
+        sms(to, m);
+    } else {
+        sms(to, "NO LOCATION");
+    }
+}
+
+// ===================== SMS Commands =====================
+static void doCmd(const String &cmd, const String &from) {
+    if (cmd == "USB ON" || cmd == "ENABLE" || cmd == "UNLOCK") {
+        setUsb(true, "SMS");
+        sms(from, "USB ENABLED");
+    }
+    else if (cmd == "USB OFF" || cmd == "DISABLE" || cmd == "LOCK") {
+        setUsb(false, "SMS");
+        sms(from, "USB DISABLED");
+    }
+    else if (cmd == "STATUS") {
+        updateBatteryAndCharging();
+        String m = "RAQEEB STATUS";
+        m += "\nLoc:" + String(gpsFix ? "GPS" : (locFix ? "LBS" : "NO"));
+        if (hasLoc()) m += "\n" + String(lat, 6) + "," + String(lon, 6);
+        if (batteryReadingValid) {
+            m += "\nBattery:" + String(batteryPercent) + "%";
+            m += "\nVolt:" + String(batteryVolt, 2) + "V";
+        } else {
+            m += "\nBattery:INVALID";
+        }
+        m += "\nCharging:" + String(chargingNow ? "YES" : "NO");
+        m += "\nUSB:" + String(usbOn ? "ON" : "OFF");
+        m += "\nData:" + String(dataOK ? "Y" : "N");
+        m += "\nMode:" + String(liveMode ? "LIVE" : (powerSaveMode ? "SAVE" : "NORMAL"));
+        m += "\nTC:" + String(tcOK) + "/" + String(tcFail);
+        m += "\nUp:" + String((millis() - bootMs) / 60000) + "m";
+        sms(from, m);
+    }
+    else if (cmd == "GPS" || cmd == "LOC" || cmd == "LOCATION" || cmd == "WHERE") {
+        sendLocSms(from);
+    }
+    else if (cmd == "FORCE LOC" || cmd == "FORCE LBS") {
+        tLoc = 0;
+        if (locRead()) {
+            String m = "LBS:\n";
+            m += String(lat, 6) + "," + String(lon, 6);
+            m += "\nAcc:" + String(accM) + "m";
+            m += "\nhttps://maps.google.com/?q=" + String(lat, 6) + "," + String(lon, 6);
+            sms(from, m);
+        } else {
+            sms(from, "NO LOCATION");
+        }
+    }
+    else if (cmd == "BATTERY" || cmd == "BATT") {
+        updateBatteryAndCharging();
+        String m = "BATTERY:\n";
+        if (batteryReadingValid) {
+            m += String(batteryPercent) + "%";
+            m += "\nVolt:" + String(batteryVolt, 2) + "V";
+        } else {
+            m += "INVALID";
+        }
+        m += "\nCharging:" + String(chargingNow ? "YES" : "NO");
+        sms(from, m);
+    }
+    else if (cmd == "TRACCAR") {
+        refreshLocationNow();
+        tTc = 0;
+        tcSend();
+        sms(from, "TC:" + String(tcOK) + "/" + String(tcFail));
+    }
+    else if (cmd == "NET") {
+        String ip = at("AT+CGPADDR=1", 5000);
+        sms(from, "Data:" + String(dataOK ? "Y" : "N") + "\n" + ip.substring(0, 60));
+    }
+    else if (cmd == "LIVE ON") {
+        if (batteryReadingValid && batteryPercent <= 15) {
+            sms(from, "LIVE BLOCKED - LOW BATTERY");
+        } else {
+            liveMode = true;
+            powerSaveMode = false;
+            sms(from, "LIVE TRACKING ENABLED");
+        }
+    }
+    else if (cmd == "LIVE OFF") {
+        liveMode = false;
+        sms(from, "LIVE TRACKING DISABLED");
+    }
+    else if (cmd == "REBOOT") {
+        sms(from, "REBOOTING");
+        delay(500);
+        ESP.restart();
+    }
+    else {
+        sms(from, "MCC USB ON/OFF, MCC STATUS, MCC GPS, MCC LOC, MCC FORCE LOC, MCC BATTERY, MCC TRACCAR, MCC NET, MCC LIVE ON/OFF, MCC REBOOT");
+    }
+}
+
+static void smsCheck() {
+    if (!modemOK) return;
+    if (millis() - tSms < T_SMS) return;
+    tSms = millis();
+
+    String r = at("AT+CMGL=\"REC UNREAD\"", 8000);
+    if (r.indexOf("+CMGL:") < 0) return;
+
+    int pos = 0;
+    while (true) {
+        int hdr = r.indexOf("+CMGL:", pos);
+        if (hdr < 0) break;
+
+        int he = r.indexOf('\n', hdr);
+        if (he < 0) break;
+        String header = r.substring(hdr, he);
+        header.trim();
+
+        int be = r.indexOf("\r\n+CMGL:", he);
+        if (be < 0) be = r.indexOf("\r\nOK", he);
+        if (be < 0) be = r.length();
+
+        String body = r.substring(he + 1, be);
+        body.trim();
+
+        int q1 = header.indexOf('"');
+        int q2 = header.indexOf('"', q1 + 1);
+        int q3 = header.indexOf('"', q2 + 1);
+        int q4 = header.indexOf('"', q3 + 1);
+        String sender = (q3 >= 0 && q4 > q3) ? header.substring(q3 + 1, q4) : "";
+
+        body.toUpperCase();
+        body.replace("\"", "");
+        body.trim();
+
+        Serial.printf("[SMS] %s: %s\n", sender.c_str(), body.c_str());
+
+        if (body.startsWith("MCC ")) {
+            body = body.substring(4);
+            body.trim();
+
+            if (ACCEPT_ANY || samePhoneLoose(sender, OWNER)) {
+                doCmd(body, sender.length() ? sender : OWNER);
+            } else {
+                Serial.println("[SMS] Sender not allowed");
+            }
+        } else {
+            Serial.println("[SMS] Ignored - missing MCC prefix");
+        }
+
+        pos = be;
+    }
+
+    at("AT+CMGDA=\"DEL READ\"", 4000);
+}
+
+// ===================== Heartbeat =====================
+static void hb() {
+    if (millis() - tHb < T_HB) return;
+    tHb = millis();
+
+    String r = at("AT+CSQ", 2000);
+    int p = r.indexOf("+CSQ:");
+    if (p >= 0) csq = r.substring(p + 6).toInt();
+
+    Serial.printf("[HB] USB=%s DATA=%s LOC=%s BATT=%s CHG=%s %.6f,%.6f TC=%d/%d LIVE=%s SAVE=%s\n",
+        usbOn ? "ON" : "OFF",
+        dataOK ? "Y" : "N",
+        gpsFix ? "GPS" : (locFix ? "LBS" : "NO"),
+        batteryReadingValid ? (String(batteryPercent) + "% " + String(batteryVolt, 2) + "V").c_str() : "INVALID",
+        chargingNow ? "Y" : "N",
+        lat, lon, tcOK, tcFail,
+        liveMode ? "ON" : "OFF",
+        powerSaveMode ? "ON" : "OFF");
+}
+
+static void netRetry() {
+    if (!modemOK || dataOK) return;
+    if (millis() - tNet < T_NET) return;
+    tNet = millis();
+    Serial.println("[NET] Retry...");
+    dataConnect();
+}
+
+static void serialCmd() {
+    if (!Serial.available()) return;
+
+    String c = Serial.readStringUntil('\n');
+    c.trim();
+    if (!c.length()) return;
+
+    String u = c;
+    u.toUpperCase();
+
+    if (u == "USB ON") setUsb(true, "SER");
+    else if (u == "USB OFF") setUsb(false, "SER");
+    else if (u == "GPS" || u == "LOC") {
+        refreshLocationNow();
+    }
+    else if (u == "FORCE LOC") {
+        tLoc = 0;
+        locRead();
+    }
+    else if (u == "BATTERY" || u == "BATT") {
+        updateBatteryAndCharging();
+        if (batteryReadingValid) {
+            Serial.printf("[BAT] %d%% %.2fV CHG=%s\n",
+                batteryPercent, batteryVolt, chargingNow ? "YES" : "NO");
+        } else {
+            Serial.printf("[BAT] INVALID CHG=%s\n", chargingNow ? "YES" : "NO");
+        }
+    }
+    else if (u == "STATUS") {
+        tHb = 0;
+        hb();
+    }
+    else if (u == "TRACCAR") {
+        refreshLocationNow();
+        tTc = 0;
+        tcSend();
+    }
+    else if (u == "NET") {
+        at("AT+CGACT?", 5000);
+        at("AT+CGPADDR=1", 5000);
+    }
+    else if (u == "LIVE ON") {
+        if (batteryReadingValid && batteryPercent <= 15) {
+            Serial.println("[LIVE] BLOCKED LOW BATTERY");
+        } else {
+            liveMode = true;
+            powerSaveMode = false;
+            Serial.println("[LIVE] ENABLED");
+        }
+    }
+    else if (u == "LIVE OFF") {
+        liveMode = false;
+        Serial.println("[LIVE] DISABLED");
+    }
+    else {
+        Serial.println(at(c, 5000));
+    }
+}
+
+// ===================== Setup / Loop =====================
+void setup() {
+    Serial.begin(115200);
+    delay(1500);
+
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(USB_SWITCH_PIN, OUTPUT);
+
+    analogReadResolution(12);
+#if defined(ESP32)
+    analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
+#endif
+    pinMode(BAT_ADC_PIN, INPUT);
+
+    if (CHARGE_DETECT_AVAILABLE) {
+        pinMode(CHARGE_DETECT_PIN, INPUT);
+    }
+
+    prefs.begin("raqeeb", false);
+    bootMs = millis();
+
+    bool saved = prefs.getBool("usb", false);
+    usbOn = saved;
+    setUsbHw(saved);
+
+    Serial.println("\n========================================");
+    Serial.println("  RAQEEB v6.0 Enhanced");
+    Serial.println("  LILYGO T-SIM7670G S3");
+    Serial.println("========================================");
+    Serial.printf("[BOOT] USB=%s\n", usbOn ? "ON" : "OFF");
+
+    gsm.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
+    delay(200);
+    modemPower();
+
+    if (modemInit()) {
+        dataConnect();
+        gpsInit();
+    }
+
+    delay(10000); // give GNSS some time after boot
+    updateBatteryAndCharging();
+
+    Serial.println("\n[OK] Ready!");
+    Serial.println("[CMD] USB ON/OFF  GPS  LOC  FORCE LOC  BATTERY  STATUS  TRACCAR  NET  LIVE ON/OFF");
+}
+
+void loop() {
+    updateBatteryAndCharging();
+    sendChargeStartAlertIfNeeded();
+
+    uint32_t gpsInterval = powerSaveMode ? T_GPS_SAVE : T_GPS;
+    uint32_t tcInterval  = powerSaveMode ? T_TC_SAVE  : T_TC;
+
+    if (millis() - tGps >= gpsInterval) {
+        tGps = millis();
+        refreshLocationNow();
+    }
+
+    updateMovementState();
+
+    if (liveMode && millis() - tLive >= T_LIVE) {
+        tLive = millis();
+        refreshLocationNow();
+        tTc = 0;
+        tcSend();
+    }
+
+    if (!liveMode && hasLoc() && (millis() - tTc >= tcInterval)) {
+        tTc = 0;
+        tcSend();
+    }
+
+    smsCheck();
+    hb();
+    netRetry();
+    serialCmd();
+
+    delay(50);
+}
