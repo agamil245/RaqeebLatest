@@ -6,6 +6,7 @@ import {
   Tooltip, Typography, Badge, Menu, MenuItem as MuiMenuItem,
 } from '@mui/material';
 import MapIcon from '@mui/icons-material/Map';
+import MeetingRoomIcon from '@mui/icons-material/MeetingRoom';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
@@ -285,6 +286,7 @@ const AppSidebar = () => {
 
   const menuItems = [
     { key: 'map', title: t('mapTitle'), icon: MapIcon, url: '/', badge: socket === false },
+    { key: 'gate', title: 'Gate', icon: MeetingRoomIcon, url: '/gate' },
     { key: 'reports', title: t('reportTitle'), icon: DescriptionIcon, items: reportItems },
     { key: 'settings', title: t('settingsTitle'), icon: SettingsIcon, items: settingsItems },
   ];
