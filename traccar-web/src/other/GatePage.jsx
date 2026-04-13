@@ -4,12 +4,7 @@ import {
   Power, DoorOpen, DoorClosed, Activity, Clock, ScanLine, CheckCircle2,
 } from 'lucide-react';
 
-const identifiedItems = [
-  { id: 1, name: 'Vehicle #A-2451', type: 'Car', time: '14:32:18', confidence: 98 },
-  { id: 2, name: 'Vehicle #B-1089', type: 'Truck', time: '14:28:05', confidence: 95 },
-  { id: 3, name: 'Vehicle #C-7723', type: 'Van', time: '14:15:42', confidence: 92 },
-  { id: 4, name: 'Vehicle #D-3361', type: 'Car', time: '13:58:11', confidence: 89 },
-];
+const identifiedItems = [];
 
 const GatePage = () => {
   const [isActive, setIsActive] = useState(false);
@@ -22,7 +17,7 @@ const GatePage = () => {
 
   return (
     <div className="bg-white dark:bg-gray-950 flex flex-col" style={{ height: '100vh' }}>
-      <div className="flex-1 flex flex-col px-6 py-5 min-h-0 overflow-auto">
+      <div className="flex-1 flex flex-col px-6 py-5 min-h-0 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -45,11 +40,11 @@ const GatePage = () => {
         </div>
 
         {/* Main grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 flex-1 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 flex-1 min-h-0" style={{ gridTemplateRows: 'minmax(0, 1fr)' }}>
           {/* Image card (spans 2 cols on large screens) */}
           <div className="lg:col-span-2 min-h-0 flex">
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex min-h-0">
-              <div className="relative w-full h-full flex-1 bg-gray-50 dark:bg-gray-800 overflow-hidden" style={{ minHeight: 400 }}>
+              <div className="relative w-full h-full flex-1 bg-gray-50 dark:bg-gray-800 overflow-hidden">
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={isActive ? 'on' : 'off'}
@@ -183,6 +178,11 @@ const GatePage = () => {
               </div>
 
               <div className="space-y-2 overflow-y-auto flex-1 min-h-0 pr-1">
+                {identifiedItems.length === 0 && (
+                  <div className="h-full flex items-center justify-center text-[11px] text-gray-400 dark:text-gray-500">
+                    No items identified yet
+                  </div>
+                )}
                 {identifiedItems.map((item) => (
                   <div
                     key={item.id}
