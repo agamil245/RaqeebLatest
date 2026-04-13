@@ -1,14 +1,41 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Power, DoorOpen, DoorClosed, Activity, Clock, ScanLine, CheckCircle2,
 } from 'lucide-react';
 
-const identifiedItems = [];
+const formatTime = (value) => {
+  if (!value) return '--:--:--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--:--:--';
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+};
 
 const GatePage = () => {
   const [isActive, setIsActive] = useState(false);
   const [lastToggled, setLastToggled] = useState(null);
+
+  const devices = useSelector((state) => state.devices.items);
+  const groups = useSelector((state) => state.groups.items);
+
+  const identifiedItems = useMemo(() => {
+    if (!isActive) return [];
+    return Object.values(devices).map((device) => {
+      const group = device.groupId ? groups[device.groupId] : null;
+      return {
+        id: device.id,
+        name: device.name,
+        type: device.category || 'Device',
+        location: group?.name || 'Ground Floor',
+        time: formatTime(device.lastUpdate),
+      };
+    });
+  }, [isActive, devices, groups]);
 
   const handleToggle = () => {
     setIsActive((prev) => !prev);
@@ -16,7 +43,7 @@ const GatePage = () => {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-950 flex flex-col" style={{ height: '100vh' }}>
+    <div className="bg-white dark:bg-gray-950 flex flex-col h-full">
       <div className="flex-1 flex flex-col px-6 py-5 min-h-0 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -149,13 +176,7 @@ const GatePage = () => {
                     </span>
                   </div>
                   <span className="text-xs font-medium text-gray-900 dark:text-gray-100">
-                    {lastToggled
-                      ? lastToggled.toLocaleTimeString('en-US', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                      })
-                      : '--'}
+                    {lastToggled ? formatTime(lastToggled) : '--'}
                   </span>
                 </div>
               </div>
@@ -180,7 +201,7 @@ const GatePage = () => {
               <div className="space-y-2 overflow-y-auto flex-1 min-h-0 pr-1">
                 {identifiedItems.length === 0 && (
                   <div className="h-full flex items-center justify-center text-[11px] text-gray-400 dark:text-gray-500">
-                    No items identified yet
+                    {isActive ? 'No devices detected' : 'Activate gate to scan for devices'}
                   </div>
                 )}
                 {identifiedItems.map((item) => (
@@ -201,12 +222,13 @@ const GatePage = () => {
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-0.5">
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
                           {item.type}
                         </p>
-                        <span className="text-[10px] font-semibold text-green-600 dark:text-green-400">
-                          {item.confidence}
-                          %
+                        <span className="text-[10px] font-semibold text-green-600 dark:text-green-400 truncate">
+                          Found in
+                          {' '}
+                          {item.location}
                         </span>
                       </div>
                     </div>
