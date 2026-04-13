@@ -355,6 +355,7 @@
     "serverDisableShare": "Disable Device Sharing",
     "serverReboot": "Reboot",
     "mapTitle": "Map",
+    "gateTitle": "Gate",
     "mapActive": "Active Maps",
     "mapOverlay": "Map Overlay",
     "mapOverlayCustom": "Custom Overlay",

@@ -286,7 +286,7 @@ const AppSidebar = () => {
 
   const menuItems = [
     { key: 'map', title: t('mapTitle'), icon: MapIcon, url: '/', badge: socket === false },
-    { key: 'gate', title: 'Gate', icon: MeetingRoomIcon, url: '/gate' },
+    { key: 'gate', title: t('gateTitle'), icon: MeetingRoomIcon, url: '/gate' },
     { key: 'reports', title: t('reportTitle'), icon: DescriptionIcon, items: reportItems },
     { key: 'settings', title: t('settingsTitle'), icon: SettingsIcon, items: settingsItems },
   ];

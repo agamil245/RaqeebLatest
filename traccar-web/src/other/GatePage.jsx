@@ -68,10 +68,10 @@ const GatePage = () => {
 
         {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 flex-1 min-h-0" style={{ gridTemplateRows: 'minmax(0, 1fr)' }}>
-          {/* Image card (narrower so image fits full height without cropping) */}
+          {/* Image card */}
           <div className="lg:col-span-3 min-h-0 flex">
-            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex min-h-0">
-              <div className="relative w-full h-full flex-1 bg-gray-50 dark:bg-gray-800 overflow-hidden">
+            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex min-h-0 relative">
+              <div className="relative w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800 overflow-hidden">
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={isActive ? 'on' : 'off'}
@@ -81,7 +81,7 @@ const GatePage = () => {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.98 }}
                     transition={{ duration: 0.4, ease: 'easeOut' }}
-                    className="absolute inset-0 w-full h-full object-contain object-center"
+                    className="h-full w-auto max-w-full object-contain"
                   />
                 </AnimatePresence>
 
@@ -106,16 +106,16 @@ const GatePage = () => {
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 shadow-sm">
               <div className="flex items-center gap-3 mb-1">
                 <div
-                  className={`h-10 w-10 rounded-xl flex items-center justify-center transition-colors ${
+                  className={`flex items-center justify-center transition-colors ${
                     isActive
-                      ? 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400'
-                      : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500'
+                      ? 'text-green-600 dark:text-green-400'
+                      : 'text-gray-500 dark:text-gray-400'
                   }`}
                 >
                   {isActive ? (
-                    <DoorOpen className="h-5 w-5" />
+                    <DoorOpen className="h-6 w-6" />
                   ) : (
-                    <DoorClosed className="h-5 w-5" />
+                    <DoorClosed className="h-6 w-6" />
                   )}
                 </div>
                 <div>
