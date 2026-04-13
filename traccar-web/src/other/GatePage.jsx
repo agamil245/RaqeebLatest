@@ -68,10 +68,10 @@ const GatePage = () => {
 
         {/* Main grid */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 flex-1 min-h-0" style={{ gridTemplateRows: 'minmax(0, 1fr)' }}>
-          {/* Image card */}
+          {/* Image card — sized to image's natural aspect at full height */}
           <div className="lg:col-span-3 min-h-0 flex">
-            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex min-h-0 relative">
-              <div className="relative w-full h-full flex items-center justify-center bg-gray-50 dark:bg-gray-800 overflow-hidden">
+            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm h-full max-w-full flex min-h-0 relative">
+              <div className="relative h-full bg-gray-50 dark:bg-gray-800 overflow-hidden">
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={isActive ? 'on' : 'off'}
@@ -81,7 +81,7 @@ const GatePage = () => {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.98 }}
                     transition={{ duration: 0.4, ease: 'easeOut' }}
-                    className="h-full w-auto max-w-full object-contain"
+                    className="h-full w-auto block max-w-full"
                   />
                 </AnimatePresence>
 
