@@ -8,7 +8,6 @@ import { useAttributePreference, usePreference } from '../../common/util/prefere
 import usePersistedState, { savePersistedState } from '../../common/util/usePersistedState';
 import { mapImages } from './preloadImages';
 import useMapStyles from './useMapStyles';
-import { useEffectAsync } from '../../reactHelper';
 
 const element = document.createElement('div');
 element.style.width = '100%';
@@ -16,6 +15,11 @@ element.style.height = '100%';
 element.style.boxSizing = 'initial';
 
 maplibregl.addProtocol('google', googleProtocol);
+
+maplibregl.setRTLTextPlugin(
+  '/mapbox-gl-rtl-text.js',
+  true,
+);
 
 export const map = new maplibregl.Map({
   container: element,
@@ -90,12 +94,6 @@ const MapView = ({ children }) => {
       ),
     [],
   );
-
-  useEffectAsync(async () => {
-    if (theme.direction === 'rtl') {
-      maplibregl.setRTLTextPlugin('/mapbox-gl-rtl-text.js');
-    }
-  }, [theme.direction]);
 
   useEffect(() => {
     const attribution = new maplibregl.AttributionControl({ compact: true });
