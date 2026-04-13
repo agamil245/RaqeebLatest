@@ -48,8 +48,8 @@ const GatePage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 flex-1 min-h-0">
           {/* Image card (spans 2 cols on large screens) */}
           <div className="lg:col-span-2 min-h-0 flex">
-            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex">
-              <div className="relative w-full bg-gray-50 dark:bg-gray-800 overflow-hidden" style={{ minHeight: 400 }}>
+            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden shadow-sm flex-1 flex min-h-0">
+              <div className="relative w-full h-full flex-1 bg-gray-50 dark:bg-gray-800 overflow-hidden" style={{ minHeight: 400 }}>
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={isActive ? 'on' : 'off'}
